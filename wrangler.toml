@@ -1,0 +1,23 @@
+name = "vintage-chat-backend"
+main = "server/worker.js"
+compatibility_date = "2024-01-01"
+
+[env.production]
+name = "vintage-chat-backend-prod"
+
+[env.staging]
+name = "vintage-chat-backend-staging"
+
+# Variables de entorno
+[vars]
+JWT_SECRET = "06a2ab97d7f6d8ad9625a42fe880fbd2b917f000868b1523a72c5c327863e793b85a6f1f172127a60d0e7e868af23c26e3676"
+
+# Configuración de KV para almacenamiento (alternativa a Redis)
+[[kv_namespaces]]
+binding = "CHAT_DATA"
+id = "e6d111a49b3a495daff8a824148accc9"
+preview_id = "abf12679ffd04a859d087e9cde6ff664"
+
+# Configuración de Pages
+[pages]
+pages_build_output_dir = "out" 

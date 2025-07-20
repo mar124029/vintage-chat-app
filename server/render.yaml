@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: vintage-chat-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://0038b952.vintage-chat-app.pages.dev
+    healthCheckPath: /health
+    autoDeploy: true
+
+databases:
+  - name: vintage-chat-redis
+    databaseName: vintage-chat
+    user: vintage-chat-user 

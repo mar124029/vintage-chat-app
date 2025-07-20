@@ -1,0 +1,5 @@
+# Manejar rutas de SPA
+/*    /index.html   200
+
+# Redirigir API calls al Worker
+/api/*  https://vintage-chat-backend.pokecraftmod.workers.dev/api/:splat  200 
