@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useReducer, useRef } from "react"
+import { useCallback, useEffect, useReducer } from "react"
+import { useSocket } from "./useSocket"
 import type { ChatState, Message, Room, User } from "@/types/chat"
 
 type ChatAction =
@@ -70,13 +71,9 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
   }
 }
 
-// Configuración de la API
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://vintage-chat-backend.pokecraftmod.workers.dev'
-
 export function useChat(token: string | null) {
   const [state, dispatch] = useReducer(chatReducer, initialState)
-  const eventSourceRef = useRef<EventSource | null>(null)
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const { socket, isConnected } = useSocket(token)
 
   // Exponer dispatch globalmente para mensajes privados locales
   if (typeof window !== "undefined") {
@@ -103,76 +100,68 @@ export function useChat(token: string | null) {
     }
   }, [token])
 
-  // Configurar Server-Sent Events para mensajes en tiempo real
   useEffect(() => {
-    if (!token) return
+    if (!socket) return
 
-    // Crear EventSource para recibir mensajes en tiempo real
-    // Nota: EventSource no soporta headers personalizados, usaremos polling como fallback
-    const eventSource = new EventSource(`${API_BASE_URL}/api/chat/stream`)
-
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'new-message') {
-          dispatch({ type: "ADD_MESSAGE", payload: data.message })
-        } else if (data.type === 'user-joined') {
-          dispatch({ type: "USER_JOINED", payload: data.user })
-        } else if (data.type === 'user-left') {
-          dispatch({ type: "USER_LEFT", payload: data.userId })
+    socket.on("message-received", (message) => {
+      console.log("Message received:", message)
+      if (message.type === "private") {
+        // Agregar el mensaje tanto al chat con el sender como con el recipient
+        if (message.senderId && message.recipientId) {
+          dispatch({ type: "ADD_PRIVATE_MESSAGE", payload: { userId: message.senderId, message } })
+          dispatch({ type: "ADD_PRIVATE_MESSAGE", payload: { userId: message.recipientId, message } })
         }
-      } catch (error) {
-        console.error('Error parsing SSE data:', error)
+      } else {
+        console.log("Adding public message to state")
+        dispatch({ type: "ADD_MESSAGE", payload: message })
       }
+    })
+
+    socket.on("historical-messages", (messages) => {
+      console.log("Historical messages received:", messages)
+      console.log("Number of historical messages:", messages.length)
+      dispatch({ type: "SET_MESSAGES", payload: messages })
+    })
+
+    socket.on("users-online", (users) => {
+      console.log("Users online:", users)
+      dispatch({ type: "SET_ONLINE_USERS", payload: users })
+    })
+
+    socket.on("user-joined", (user) => {
+      console.log("User joined:", user)
+      dispatch({ type: "USER_JOINED", payload: user })
+    })
+
+    socket.on("user-left", (userId) => {
+      console.log("User left:", userId)
+      dispatch({ type: "USER_LEFT", payload: userId })
+    })
+
+    socket.on("private-messages-loaded", (data) => {
+      console.log("Private messages loaded:", data)
+      dispatch({ type: "SET_PRIVATE_MESSAGES", payload: { userId: data.userId, messages: data.messages } })
+    })
+
+    // Unirse automáticamente a la sala general cuando se conecta
+    if (isConnected && !state.activeRoom) {
+      console.log("Joining general room")
+      dispatch({ type: "SET_ACTIVE_ROOM", payload: "general" })
     }
-
-    eventSource.onerror = (error) => {
-      console.error('EventSource error:', error)
-    }
-
-    eventSourceRef.current = eventSource
-
-    // Polling para obtener mensajes y usuarios (fallback)
-    const pollMessages = async () => {
-      try {
-        const [messagesResponse, usersResponse] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/chat/messages`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          }),
-          fetch(`${API_BASE_URL}/api/chat/users`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          })
-        ])
-
-        if (messagesResponse.ok) {
-          const messages = await messagesResponse.json()
-          dispatch({ type: "SET_MESSAGES", payload: messages })
-        }
-
-        if (usersResponse.ok) {
-          const users = await usersResponse.json()
-          dispatch({ type: "SET_ONLINE_USERS", payload: users })
-        }
-      } catch (error) {
-        console.error('Polling error:', error)
-      }
-    }
-
-    // Polling cada 10 segundos
-    pollingIntervalRef.current = setInterval(pollMessages, 10000)
-    pollMessages() // Poll inicial
 
     return () => {
-      eventSource.close()
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current)
-      }
+      socket.off("message-received")
+      socket.off("historical-messages")
+      socket.off("users-online")
+      socket.off("user-joined")
+      socket.off("user-left")
+      socket.off("private-messages-loaded")
     }
-  }, [token])
+  }, [socket, state.currentUser?.id, isConnected, state.activeRoom])
 
   const sendMessage = useCallback(
-    async (content: string, recipientId?: string) => {
-      if (!state.currentUser) return
+    (content: string, recipientId?: string) => {
+      if (!socket || !state.currentUser) return
 
       const messageData = {
         content,
@@ -183,76 +172,56 @@ export function useChat(token: string | null) {
         type: recipientId ? ("private" as const) : ("public" as const),
       }
 
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/chat/messages`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(messageData)
-        })
-
-        if (response.ok) {
-          const newMessage = await response.json()
-          if (recipientId) {
-            dispatch({ type: "ADD_PRIVATE_MESSAGE", payload: { userId: recipientId, message: newMessage } })
-          } else {
-            dispatch({ type: "ADD_MESSAGE", payload: newMessage })
-          }
-        }
-      } catch (error) {
-        console.error('Error sending message:', error)
-      }
+      console.log("Sending message data:", messageData)
+      socket.emit("send-message", messageData)
     },
-    [state.currentUser, state.activeRoom, token],
+    [socket, state.currentUser, state.activeRoom],
   )
 
   const sendTypingIndicator = useCallback(
-    async (isTyping: boolean, recipientId?: string) => {
-      // Implementar si es necesario
-      console.log('Typing indicator:', isTyping, recipientId)
+    (isTyping: boolean, recipientId?: string) => {
+      if (!socket) return
+
+      if (isTyping) {
+        socket.emit("typing", { recipientId, roomId: recipientId ? undefined : (state.activeRoom || undefined) })
+      } else {
+        socket.emit("stop-typing", { recipientId, roomId: recipientId ? undefined : (state.activeRoom || undefined) })
+      }
     },
-    [],
+    [socket, state.activeRoom],
   )
 
   const joinRoom = useCallback(
     (roomId: string) => {
+      if (!socket) return
+      socket.emit("join-room", roomId)
       dispatch({ type: "SET_ACTIVE_ROOM", payload: roomId })
     },
-    [],
+    [socket],
   )
 
   const leaveRoom = useCallback(
     (roomId: string) => {
+      if (!socket) return
+      socket.emit("leave-room", roomId)
       if (state.activeRoom === roomId) {
         dispatch({ type: "SET_ACTIVE_ROOM", payload: null })
       }
     },
-    [state.activeRoom],
+    [socket, state.activeRoom],
   )
 
   const loadPrivateMessages = useCallback(
-    async (userId: string) => {
-      try {
-        const response = await fetch(`${API_BASE_URL}/api/chat/messages?recipientId=${userId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        })
-
-        if (response.ok) {
-          const messages = await response.json()
-          dispatch({ type: "SET_PRIVATE_MESSAGES", payload: { userId, messages } })
-        }
-      } catch (error) {
-        console.error('Error loading private messages:', error)
-      }
+    (userId: string) => {
+      if (!socket) return
+      socket.emit("load-private-messages", userId)
     },
-    [token],
+    [socket],
   )
 
   return {
     ...state,
-    isConnected: !!eventSourceRef.current,
+    isConnected,
     sendMessage,
     sendTypingIndicator,
     joinRoom,
