@@ -4,6 +4,7 @@ const socketIo = require("socket.io");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const Redis = require("redis");
+const bcrypt = require("bcryptjs");
 require("dotenv").config();
 
 const app = express();
@@ -31,55 +32,57 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json());
 
-// Simular base de datos de usuarios (en producción usarías una base de datos real)
-const users = new Map();
+// --- Funciones auxiliares para usuarios en Redis ---
+async function saveUser(user) {
+  await redisClient.hSet("users", user.id, JSON.stringify(user));
+}
+async function findUserByEmail(email) {
+  const users = await redisClient.hGetAll("users");
+  return Object.values(users)
+    .map((u) => JSON.parse(u))
+    .find((u) => u.email === email);
+}
+async function findUserByUsername(username) {
+  const users = await redisClient.hGetAll("users");
+  return Object.values(users)
+    .map((u) => JSON.parse(u))
+    .find((u) => u.username === username);
+}
+async function findUserById(id) {
+  const userStr = await redisClient.hGet("users", id);
+  return userStr ? JSON.parse(userStr) : null;
+}
 
 // Rutas de autenticación
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { username, email, password } = req.body;
-
-    // Validaciones básicas
     if (!username || !email || !password) {
-      return res.status(400).json({
-        error: "Username, email and password are required",
-      });
+      return res
+        .status(400)
+        .json({ error: "Username, email and password are required" });
     }
-
-    // Verificar si el usuario ya existe
-    const existingUser = Array.from(users.values()).find(
-      (user) => user.email === email || user.username === username
-    );
-
-    if (existingUser) {
-      return res.status(409).json({
-        error: "User already exists",
-      });
+    const existingByEmail = await findUserByEmail(email);
+    const existingByUsername = await findUserByUsername(username);
+    if (existingByEmail || existingByUsername) {
+      return res.status(409).json({ error: "User already exists" });
     }
-
-    // Crear nuevo usuario
+    // Hashear la contraseña antes de guardar
+    const hashedPassword = await bcrypt.hash(password, 10);
     const userId = Date.now().toString();
     const newUser = {
       id: userId,
       username,
       email,
-      password, // En producción deberías hashear la contraseña
+      password: hashedPassword,
       createdAt: new Date(),
     };
-
-    users.set(userId, newUser);
-
-    // Generar token JWT
+    await saveUser(newUser);
     const token = jwt.sign(
-      {
-        userId: newUser.id,
-        username: newUser.username,
-        email: newUser.email,
-      },
+      { userId: newUser.id, username: newUser.username, email: newUser.email },
       process.env.JWT_SECRET || "your-secret-key",
       { expiresIn: "24h" }
     );
-
     res.status(201).json({
       user: {
         id: newUser.id,
@@ -97,42 +100,25 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    // Validaciones básicas
     if (!email || !password) {
-      return res.status(400).json({
-        error: "Email and password are required",
-      });
+      return res.status(400).json({ error: "Email and password are required" });
     }
-
-    // Buscar usuario
-    const user = Array.from(users.values()).find(
-      (user) => user.email === email && user.password === password
-    );
-
+    const user = await findUserByEmail(email);
     if (!user) {
-      return res.status(401).json({
-        error: "Invalid credentials",
-      });
+      return res.status(401).json({ error: "Invalid credentials" });
     }
-
-    // Generar token JWT
+    // Comparar la contraseña ingresada con el hash guardado
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
     const token = jwt.sign(
-      {
-        userId: user.id,
-        username: user.username,
-        email: user.email,
-      },
+      { userId: user.id, username: user.username, email: user.email },
       process.env.JWT_SECRET || "your-secret-key",
       { expiresIn: "24h" }
     );
-
     res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-      },
+      user: { id: user.id, username: user.username, email: user.email },
       token,
     });
   } catch (error) {
@@ -144,42 +130,24 @@ app.post("/api/auth/login", async (req, res) => {
 app.post("/api/auth/validate", async (req, res) => {
   try {
     const { token } = req.body;
-
     if (!token) {
-      return res.status(400).json({
-        error: "Token is required",
-      });
+      return res.status(400).json({ error: "Token is required" });
     }
-
-    // Verificar token
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET || "your-secret-key"
     );
-
-    // Buscar usuario
-    const user = users.get(decoded.userId);
-
+    const user = await findUserById(decoded.userId);
     if (!user) {
-      return res.status(401).json({
-        error: "User not found",
-      });
+      return res.status(401).json({ error: "User not found" });
     }
-
     res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-      },
+      user: { id: user.id, username: user.username, email: user.email },
       valid: true,
     });
   } catch (error) {
     console.error("Token validation error:", error);
-    res.status(401).json({
-      error: "Invalid token",
-      valid: false,
-    });
+    res.status(401).json({ error: "Invalid token", valid: false });
   }
 });
 
