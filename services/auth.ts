@@ -17,7 +17,7 @@ export interface AuthResponse {
 }
 
 class AuthService {
-  private baseUrl = process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/api/auth` : "https://vintage-chat-backend.onrender.com/api/auth"
+  private baseUrl = process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/api/auth` : "https://vintage-chat-app.onrender.com/api/auth"
 
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
     const response = await fetch(`${this.baseUrl}/login`, {

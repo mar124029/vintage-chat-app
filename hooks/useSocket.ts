@@ -15,7 +15,7 @@ export function useSocket(token: string | null) {
     }
 
     console.log("Attempting to connect to socket server...")
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "https://vintage-chat-backend.onrender.com"
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "https://vintage-chat-app.onrender.com"
     console.log("Socket URL:", socketUrl)
 
     const socket = io(socketUrl, {
