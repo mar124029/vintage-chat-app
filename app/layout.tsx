@@ -16,6 +16,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="icon" type="image/png" href="/icons8-chat-16.png" />
+      </head>
       <body className={`${inter.className} main-container`}>
         {children}
       </body>
